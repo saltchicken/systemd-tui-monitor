@@ -16,6 +16,10 @@ pub struct App {
     list_state: ListState,
     should_quit: bool,
     show_only_user_config: bool,
+
+    showing_logs: bool,
+    logs: Vec<String>,
+    log_scroll: u16,
 }
 
 impl App {
@@ -28,6 +32,10 @@ impl App {
             list_state,
             should_quit: false,
             show_only_user_config: true,
+
+            showing_logs: false,
+            logs: Vec::new(),
+            log_scroll: 0,
         }
     }
 
@@ -58,6 +66,9 @@ impl App {
                     &current_view_services,
                     &mut self.list_state,
                     self.show_only_user_config,
+                    self.showing_logs,
+                    &self.logs,
+                    self.log_scroll,
                 )
             })?;
 
@@ -67,34 +78,79 @@ impl App {
 
             if crossterm::event::poll(timeout)? {
                 if let Event::Key(key) = event::read()? {
-                    match key.code {
-                        KeyCode::Char('q') => self.should_quit = true,
-
-                        KeyCode::Char('j') => self.next(&current_view_services),
-                        KeyCode::Char('k') => self.previous(&current_view_services),
-
-                        KeyCode::Tab => {
-                            self.show_only_user_config = !self.show_only_user_config;
-                            self.list_state.select(Some(0)); // Reset selection to avoid out of bounds
+                    if self.showing_logs {
+                        match key.code {
+                            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('l') => {
+                                self.showing_logs = false;
+                                self.logs.clear();
+                                self.log_scroll = 0;
+                            }
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                if self.log_scroll < (self.logs.len() as u16).saturating_sub(1) {
+                                    self.log_scroll += 1;
+                                }
+                            }
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                if self.log_scroll > 0 {
+                                    self.log_scroll -= 1;
+                                }
+                            }
+                            _ => {}
                         }
+                    } else {
+                        match key.code {
+                            KeyCode::Char('q') => self.should_quit = true,
 
-                        KeyCode::Char('s') => self.perform_action(
-                            systemd::ServiceAction::Start,
-                            &current_view_services,
-                        )?,
-                        KeyCode::Char('x') => self
-                            .perform_action(systemd::ServiceAction::Stop, &current_view_services)?,
-                        KeyCode::Char('r') => self.perform_action(
-                            systemd::ServiceAction::Restart,
-                            &current_view_services,
-                        )?,
-                        _ => {}
+                            KeyCode::Char('j') => self.next(&current_view_services),
+                            KeyCode::Char('k') => self.previous(&current_view_services),
+
+                            KeyCode::Tab => {
+                                self.show_only_user_config = !self.show_only_user_config;
+                                self.list_state.select(Some(0));
+                            }
+
+                            KeyCode::Char('l') => {
+                                if let Some(index) = self.list_state.selected() {
+                                    if let Some(service) = current_view_services.get(index) {
+                                        // Fetch logs and switch mode
+                                        match systemd::get_service_logs(&service.name) {
+                                            Ok(logs) => {
+                                                self.logs = logs;
+                                                self.showing_logs = true;
+                                                self.log_scroll = 0;
+                                            }
+                                            Err(_) => {
+                                                // Handle error (maybe show a red flash or status?)
+                                                // For now silently fail or could set logs to ["Error fetching logs"]
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            KeyCode::Char('s') => self.perform_action(
+                                systemd::ServiceAction::Start,
+                                &current_view_services,
+                            )?,
+                            KeyCode::Char('x') => self.perform_action(
+                                systemd::ServiceAction::Stop,
+                                &current_view_services,
+                            )?,
+                            KeyCode::Char('r') => self.perform_action(
+                                systemd::ServiceAction::Restart,
+                                &current_view_services,
+                            )?,
+                            _ => {}
+                        }
                     }
                 }
             }
 
             if last_tick.elapsed() >= tick_rate {
-                self.refresh_services()?;
+                // Don't refresh service list while reading logs to prevent UI jumping
+                if !self.showing_logs {
+                    self.refresh_services()?;
+                }
                 last_tick = Instant::now();
             }
 
@@ -163,7 +219,6 @@ impl App {
     ) -> Result<()> {
         if let Some(index) = self.list_state.selected() {
             if let Some(service) = services.get(index) {
-                // Ignore result here to prevent crash on permission error
                 let _ = systemd::control_service(&service.name, action);
                 self.refresh_services()?;
             }

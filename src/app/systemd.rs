@@ -1,5 +1,3 @@
-// Handles all interactions with the `systemctl` command.
-
 use super::model::Service;
 use anyhow::{Context, Result};
 use std::collections::HashSet;
@@ -12,7 +10,6 @@ pub enum ServiceAction {
     Stop,
     Restart,
 }
-
 
 fn get_user_defined_services() -> HashSet<String> {
     let mut names = HashSet::new();
@@ -38,7 +35,6 @@ fn get_user_defined_services() -> HashSet<String> {
 /// Fetches the list of user services from systemd.
 /// We use `--user` to target ~/.config/systemd/user and /usr/lib/systemd/user
 pub fn get_user_services() -> Result<Vec<Service>> {
-
     let user_config_services = get_user_defined_services();
 
     // We filter for services, --all to see inactive ones, and use no-legend/no-pager for parsing safety.
@@ -140,4 +136,20 @@ pub fn control_service(service_name: &str, action: ServiceAction) -> Result<()> 
     } else {
         Err(anyhow::anyhow!("Failed to perform action on service"))
     }
+}
+
+
+pub fn get_service_logs(service_name: &str) -> Result<Vec<String>> {
+    let output = Command::new("journalctl")
+        .arg("--user")
+        .arg("-u")
+        .arg(service_name)
+        .arg("-n")
+        .arg("100")
+        .arg("--no-pager")
+        .output()
+        .context("Failed to fetch logs")?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.lines().map(|s| s.to_string()).collect())
 }
