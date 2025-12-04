@@ -1,3 +1,5 @@
+// Handles all interactions with the `systemctl` command.
+
 use super::model::Service;
 use anyhow::{Context, Result};
 use std::collections::HashSet;

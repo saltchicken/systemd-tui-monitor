@@ -20,6 +20,7 @@ pub struct App {
     showing_logs: bool,
     logs: Vec<String>,
     log_scroll: u16,
+    stick_to_bottom: bool,
 }
 
 impl App {
@@ -36,6 +37,7 @@ impl App {
             showing_logs: false,
             logs: Vec::new(),
             log_scroll: 0,
+            stick_to_bottom: true,
         }
     }
 
@@ -55,10 +57,31 @@ impl App {
         self.refresh_services()?;
 
         let mut last_tick = Instant::now();
-        let tick_rate = Duration::from_secs(2);
+
+        let tick_rate = Duration::from_millis(250);
 
         loop {
             let current_view_services = self.get_current_view_services();
+            let terminal_size = terminal.size()?;
+
+            if self.showing_logs {
+                if let Some(index) = self.list_state.selected() {
+                    if let Some(service) = current_view_services.get(index) {
+                        if let Ok(new_logs) = systemd::get_service_logs(&service.name) {
+                            self.logs = new_logs;
+
+                            if self.stick_to_bottom {
+                                // Calculate popup height (80% of terminal height)
+                                // We subtract 2 for borders
+                                let popup_height =
+                                    (terminal_size.height * 80 / 100).saturating_sub(2);
+                                self.log_scroll =
+                                    (self.logs.len() as u16).saturating_sub(popup_height);
+                            }
+                        }
+                    }
+                }
+            }
 
             terminal.draw(|f| {
                 ui::render(
@@ -69,6 +92,7 @@ impl App {
                     self.showing_logs,
                     &self.logs,
                     self.log_scroll,
+                    self.stick_to_bottom,
                 )
             })?;
 
@@ -84,16 +108,23 @@ impl App {
                                 self.showing_logs = false;
                                 self.logs.clear();
                                 self.log_scroll = 0;
+                                self.stick_to_bottom = true; // Reset for next time
                             }
                             KeyCode::Char('j') | KeyCode::Down => {
+                                self.stick_to_bottom = false;
                                 if self.log_scroll < (self.logs.len() as u16).saturating_sub(1) {
                                     self.log_scroll += 1;
                                 }
                             }
                             KeyCode::Char('k') | KeyCode::Up => {
+                                self.stick_to_bottom = false;
                                 if self.log_scroll > 0 {
                                     self.log_scroll -= 1;
                                 }
+                            }
+
+                            KeyCode::Char('G') | KeyCode::End => {
+                                self.stick_to_bottom = true;
                             }
                             _ => {}
                         }
@@ -118,10 +149,10 @@ impl App {
                                                 self.logs = logs;
                                                 self.showing_logs = true;
                                                 self.log_scroll = 0;
+                                                self.stick_to_bottom = true;
                                             }
                                             Err(_) => {
-                                                // Handle error (maybe show a red flash or status?)
-                                                // For now silently fail or could set logs to ["Error fetching logs"]
+                                                // Handle error
                                             }
                                         }
                                     }
@@ -148,6 +179,7 @@ impl App {
 
             if last_tick.elapsed() >= tick_rate {
                 // Don't refresh service list while reading logs to prevent UI jumping
+                // But we DO refresh logs inside the loop above
                 if !self.showing_logs {
                     self.refresh_services()?;
                 }

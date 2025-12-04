@@ -19,6 +19,7 @@ pub fn render(
     showing_logs: bool,
     logs: &[String],
     log_scroll: u16,
+    stick_to_bottom: bool,
 ) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -30,7 +31,7 @@ pub fn render(
 
 
     if showing_logs {
-        render_logs(f, logs, log_scroll);
+        render_logs(f, logs, log_scroll, stick_to_bottom);
     }
 }
 
@@ -94,6 +95,8 @@ fn render_footer(f: &mut Frame, area: Rect, showing_logs: bool) {
         Line::from(vec![
             Span::raw("Scroll: "),
             Span::styled("j/k ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("| Auto-Scroll: "),
+            Span::styled("G ", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw("| Close: "),
             Span::styled("Esc/q/l ", Style::default().fg(Color::Red)),
         ])
@@ -122,24 +125,26 @@ fn render_footer(f: &mut Frame, area: Rect, showing_logs: bool) {
 }
 
 
-fn render_logs(f: &mut Frame, logs: &[String], scroll: u16) {
+fn render_logs(f: &mut Frame, logs: &[String], scroll: u16, stick_to_bottom: bool) {
     let area = centered_rect(80, 80, f.area());
 
-    // Clear the background of the popup so the list doesn't show through
     f.render_widget(Clear, area);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Service Logs (Last 100 lines) - Press Esc to Close ");
 
-    // Convert Vec<String> to Vec<Line>
+    let title = if stick_to_bottom {
+        " Service Logs (Live | Auto-scroll: ON) - Press 'j/k' to pause "
+    } else {
+        " Service Logs (Paused | Auto-scroll: OFF) - Press 'G' to resume "
+    };
+
+    let block = Block::default().borders(Borders::ALL).title(title);
+
     let content: Vec<Line> = logs.iter().map(|s| Line::from(s.as_str())).collect();
 
-    let paragraph = Paragraph::new(content).block(block).scroll((scroll, 0)); // (vertical, horizontal)
+    let paragraph = Paragraph::new(content).block(block).scroll((scroll, 0));
 
     f.render_widget(paragraph, area);
 }
-
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
