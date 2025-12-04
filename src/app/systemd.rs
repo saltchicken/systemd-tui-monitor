@@ -2,6 +2,7 @@
 
 use super::model::Service;
 use anyhow::{Context, Result};
+use std::collections::HashSet;
 use std::process::Command;
 
 pub enum ServiceAction {
@@ -30,6 +31,7 @@ pub fn get_user_services() -> Result<Vec<Service>> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut services = Vec::new();
+    let mut seen_names = HashSet::new();
 
     // Parse the output line by line
     // Expected format approx: unit_name loaded active sub description...
@@ -39,14 +41,50 @@ pub fn get_user_services() -> Result<Vec<Service>> {
             continue;
         }
 
+        let name = parts[0].to_string();
+
         // Basic parsing strategy based on standard systemctl output
         services.push(Service {
-            name: parts[0].to_string(),
+            name: name.clone(),
             loaded_state: parts[1].to_string(),
             active_state: parts[2].to_string(),
             sub_state: parts[3].to_string(),
         });
+
+        seen_names.insert(name);
     }
+
+    let output_files = Command::new("systemctl")
+        .arg("--user")
+        .arg("list-unit-files")
+        .arg("--type=service")
+        .arg("--no-pager")
+        .arg("--no-legend")
+        .output()
+        .context("Failed to execute systemctl list-unit-files")?;
+
+    if output_files.status.success() {
+        let stdout_files = String::from_utf8_lossy(&output_files.stdout);
+        for line in stdout_files.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.is_empty() {
+                continue;
+            }
+
+            let name = parts[0];
+            // If we haven't seen this service in the loaded list, add it as unloaded/inactive
+            if !seen_names.contains(name) {
+                services.push(Service {
+                    name: name.to_string(),
+                    loaded_state: "unloaded".to_string(),
+                    active_state: "inactive".to_string(),
+                    sub_state: "dead".to_string(),
+                });
+            }
+        }
+    }
+
+    services.sort_by(|a, b| a.name.cmp(&b.name));
 
     Ok(services)
 }
