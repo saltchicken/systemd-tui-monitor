@@ -3,7 +3,9 @@
 use super::model::Service;
 use anyhow::{Context, Result};
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::process::Command;
+use std::{env, fs};
 
 pub enum ServiceAction {
     Start,
@@ -11,9 +13,34 @@ pub enum ServiceAction {
     Restart,
 }
 
+
+fn get_user_defined_services() -> HashSet<String> {
+    let mut names = HashSet::new();
+    // Get home directory
+    if let Ok(home) = env::var("HOME") {
+        let config_path = PathBuf::from(home).join(".config/systemd/user");
+
+        // Read directory if it exists
+        if let Ok(entries) = fs::read_dir(config_path) {
+            for entry in entries.flatten() {
+                if let Ok(file_name) = entry.file_name().into_string() {
+                    // We assume anything ending in .service is a relevant unit
+                    if file_name.ends_with(".service") {
+                        names.insert(file_name);
+                    }
+                }
+            }
+        }
+    }
+    names
+}
+
 /// Fetches the list of user services from systemd.
 /// We use `--user` to target ~/.config/systemd/user and /usr/lib/systemd/user
 pub fn get_user_services() -> Result<Vec<Service>> {
+
+    let user_config_services = get_user_defined_services();
+
     // We filter for services, --all to see inactive ones, and use no-legend/no-pager for parsing safety.
     let output = Command::new("systemctl")
         .arg("--user")
@@ -42,6 +69,7 @@ pub fn get_user_services() -> Result<Vec<Service>> {
         }
 
         let name = parts[0].to_string();
+        let is_config = user_config_services.contains(&name);
 
         // Basic parsing strategy based on standard systemctl output
         services.push(Service {
@@ -49,6 +77,7 @@ pub fn get_user_services() -> Result<Vec<Service>> {
             loaded_state: parts[1].to_string(),
             active_state: parts[2].to_string(),
             sub_state: parts[3].to_string(),
+            is_user_config: is_config,
         });
 
         seen_names.insert(name);
@@ -74,11 +103,14 @@ pub fn get_user_services() -> Result<Vec<Service>> {
             let name = parts[0];
             // If we haven't seen this service in the loaded list, add it as unloaded/inactive
             if !seen_names.contains(name) {
+                let is_config = user_config_services.contains(name);
+
                 services.push(Service {
                     name: name.to_string(),
                     loaded_state: "unloaded".to_string(),
                     active_state: "inactive".to_string(),
                     sub_state: "dead".to_string(),
+                    is_user_config: is_config,
                 });
             }
         }
@@ -109,4 +141,3 @@ pub fn control_service(service_name: &str, action: ServiceAction) -> Result<()> 
         Err(anyhow::anyhow!("Failed to perform action on service"))
     }
 }
-
