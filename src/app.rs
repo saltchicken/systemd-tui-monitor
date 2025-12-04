@@ -27,10 +27,9 @@ impl App {
             services: Vec::new(),
             list_state,
             should_quit: false,
-            show_only_user_config: false,
+            show_only_user_config: true,
         }
     }
-
 
     fn get_current_view_services(&self) -> Vec<Service> {
         if self.show_only_user_config {
@@ -51,7 +50,6 @@ impl App {
         let tick_rate = Duration::from_secs(2);
 
         loop {
-
             let current_view_services = self.get_current_view_services();
 
             terminal.draw(|f| {
@@ -110,7 +108,6 @@ impl App {
         let new_services = systemd::get_user_services()?;
         self.services = new_services;
 
-
         let current_view_len = self.get_current_view_services().len();
         if let Some(selected) = self.list_state.selected() {
             if current_view_len == 0 {
@@ -122,7 +119,6 @@ impl App {
         }
         Ok(())
     }
-
 
     fn next(&mut self, services: &[Service]) {
         if services.is_empty() {
@@ -160,7 +156,6 @@ impl App {
         self.list_state.select(Some(i));
     }
 
-
     fn perform_action(
         &mut self,
         action: systemd::ServiceAction,
@@ -176,3 +171,4 @@ impl App {
         Ok(())
     }
 }
+
