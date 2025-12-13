@@ -1,5 +1,3 @@
-// The central application controller and event loop.
-
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode};
 use ratatui::{Terminal, backend::Backend, widgets::ListState};
@@ -21,6 +19,9 @@ pub struct App {
     logs: Vec<String>,
     log_scroll: u16,
     stick_to_bottom: bool,
+
+    last_data_tick: Instant,
+    data_tick_rate: Duration,
 }
 
 impl App {
@@ -38,6 +39,9 @@ impl App {
             logs: Vec::new(),
             log_scroll: 0,
             stick_to_bottom: true,
+
+            last_data_tick: Instant::now(),
+            data_tick_rate: Duration::from_secs(2),
         }
     }
 
@@ -58,21 +62,27 @@ impl App {
 
         let mut last_tick = Instant::now();
 
-        let tick_rate = Duration::from_millis(250);
+        let tick_rate = Duration::from_millis(100);
 
         loop {
             let current_view_services = self.get_current_view_services();
             let terminal_size = terminal.size()?;
 
+            // We only fetch if NOT showing logs (to prevent UI jumps/lag while reading)
+            if !self.showing_logs && self.last_data_tick.elapsed() >= self.data_tick_rate {
+                self.refresh_services()?;
+                self.last_data_tick = Instant::now();
+            }
+
             if self.showing_logs {
                 if let Some(index) = self.list_state.selected() {
                     if let Some(service) = current_view_services.get(index) {
+                        // Ideally this should also be throttled, but for now we keep it
+                        // to ensure "live" logs feel live.
                         if let Ok(new_logs) = systemd::get_service_logs(&service.name) {
                             self.logs = new_logs;
 
                             if self.stick_to_bottom {
-                                // Calculate popup height (80% of terminal height)
-                                // We subtract 2 for borders
                                 let popup_height =
                                     (terminal_size.height * 80 / 100).saturating_sub(2);
                                 self.log_scroll =
@@ -108,7 +118,9 @@ impl App {
                                 self.showing_logs = false;
                                 self.logs.clear();
                                 self.log_scroll = 0;
-                                self.stick_to_bottom = true; // Reset for next time
+                                self.stick_to_bottom = true;
+
+                                self.force_next_refresh();
                             }
                             KeyCode::Char('j') | KeyCode::Down => {
                                 self.stick_to_bottom = false;
@@ -143,7 +155,6 @@ impl App {
                             KeyCode::Char('l') => {
                                 if let Some(index) = self.list_state.selected() {
                                     if let Some(service) = current_view_services.get(index) {
-                                        // Fetch logs and switch mode
                                         match systemd::get_service_logs(&service.name) {
                                             Ok(logs) => {
                                                 self.logs = logs;
@@ -178,11 +189,6 @@ impl App {
             }
 
             if last_tick.elapsed() >= tick_rate {
-                // Don't refresh service list while reading logs to prevent UI jumping
-                // But we DO refresh logs inside the loop above
-                if !self.showing_logs {
-                    self.refresh_services()?;
-                }
                 last_tick = Instant::now();
             }
 
@@ -192,17 +198,25 @@ impl App {
         }
     }
 
+    fn force_next_refresh(&mut self) {
+        // We set the last_tick to the past, ensuring elapsed() > 2s
+        self.last_data_tick = Instant::now()
+            .checked_sub(self.data_tick_rate * 2)
+            .unwrap_or(Instant::now());
+    }
+
     fn refresh_services(&mut self) -> Result<()> {
         let new_services = systemd::get_user_services()?;
+
         self.services = new_services;
 
-        let current_view_len = self.get_current_view_services().len();
+        // Logic to correct cursor if list shrunk
         if let Some(selected) = self.list_state.selected() {
-            if current_view_len == 0 {
+            let current_len = self.get_current_view_services().len();
+            if current_len == 0 {
                 self.list_state.select(None);
-            } else if selected >= current_view_len {
-                self.list_state
-                    .select(Some(current_view_len.saturating_sub(1)));
+            } else if selected >= current_len {
+                self.list_state.select(Some(current_len.saturating_sub(1)));
             }
         }
         Ok(())
@@ -251,11 +265,13 @@ impl App {
     ) -> Result<()> {
         if let Some(index) = self.list_state.selected() {
             if let Some(service) = services.get(index) {
+                // In a production app, we would spawn a thread here.
                 let _ = systemd::control_service(&service.name, action);
-                self.refresh_services()?;
+
+                // we force the next loop iteration to refresh data.
+                self.force_next_refresh();
             }
         }
         Ok(())
     }
 }
-
